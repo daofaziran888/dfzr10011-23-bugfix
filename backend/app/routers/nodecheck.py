@@ -1,4 +1,4 @@
-"""节点状态巡检接口：维护巡检记录，覆盖标记异常、隔离节点、恢复节点等动作。"""
+"""节点状态巡检接口：维护巡检记录，并暴露修复均衡策略状态清单与节点巡检负载视图。"""
 from __future__ import annotations
 
 from typing import Any
@@ -30,6 +30,26 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/repair-balance-summary")
+def repair_balance_summary() -> dict[str, Any]:
+    """巡检模块的修复均衡策略状态汇总清单，数据与均衡模块同一份取数逻辑。"""
+    items = service.repair_balance_summary()
+    return {"module": "nodecheck", "source": "修复均衡策略状态汇总清单", "total": len(items), "items": items}
+
+
+@router.get("/node-load-view")
+def node_load_view() -> dict[str, Any]:
+    """节点巡检负载视图：读取均衡执行结果，只反映实际生效策略的版本与阈值。"""
+    return service.node_load_view()
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出节点状态巡检清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "nodecheck", "total": total, "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条巡检记录明细；不存在时给出可读的错误说明。"""
@@ -56,10 +76,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出节点状态巡检清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "nodecheck", "total": total, "items": items}

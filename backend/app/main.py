@@ -5,14 +5,25 @@
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import ROUTERS
+from app.services.balance import BalanceService
 from app.store import store
 
-app = FastAPI(title="分布式采集调度引擎", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # 启动即按实际生效策略生成均衡执行结果，保证巡检负载视图有数据可复查。
+    BalanceService()._refresh_executions()
+    yield
+
+
+app = FastAPI(title="分布式采集调度引擎", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

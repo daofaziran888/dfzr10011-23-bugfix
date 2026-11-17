@@ -59,6 +59,56 @@
       <span>共 {{ total }} 条全局采集看板记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
+
+    <section class="result-block">
+      <header class="block-head">
+        <h3>均衡策略同步面板（与节点状态巡检模块同源）</h3>
+        <button class="btn ghost" type="button" @click="loadBalanceData">刷新均衡数据</button>
+      </header>
+      <p class="page-desc">同步采用巡检模块的修复均衡策略状态清单与均衡执行结果数据，页面不做二次计算，阈值只认实际生效版本。</p>
+
+      <h4 class="sub-title">修复均衡策略状态汇总清单</h4>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th v-for="column in summaryColumns" :key="column">{{ column }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in balanceSummary" :key="String(item.id)">
+            <td v-for="column in summaryColumns" :key="column">
+              <template v-if="column === '实际生效'">
+                <span :class="['status-tag', item.实际生效 ? 'tag-active' : 'tag-draft']">
+                  {{ item.实际生效 ? '生效中' : '未生效' }}
+                </span>
+              </template>
+              <template v-else-if="column === '节点集合'">{{ joinNodes(item.节点集合) }}</template>
+              <template v-else>{{ item[column] ?? '—' }}</template>
+            </td>
+          </tr>
+          <tr v-if="!balanceSummary.length">
+            <td :colspan="summaryColumns.length" class="empty-state">暂无均衡策略状态记录</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4 class="sub-title">均衡执行结果（节点级扩缩容建议）</h4>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th v-for="column in executionColumns" :key="column">{{ column }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in balanceExecutions" :key="String(item.id)">
+            <td v-for="column in executionColumns" :key="column">{{ item[column] ?? '—' }}</td>
+          </tr>
+          <tr v-if="!balanceExecutions.length">
+            <td :colspan="executionColumns.length" class="empty-state">当前无实际生效策略，执行结果为空</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
   </section>
 </template>
 
@@ -67,19 +117,27 @@ import { onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | string[] | null>
+
+function joinNodes(value: Row[keyof Row]): string {
+  return Array.isArray(value) ? value.join('、') : String(value ?? '')
+}
 
 const ENDPOINT = '/api/dashboard'
 const columns = ["面板编号", "面板名称", "显示指标", "刷新间隔", "告警配置", "数据范围", "创建人", "面板状态"]
 const actions = ["启用面板", "暂停面板", "归档面板"]
 const statuses = ["草稿", "已启用", "已暂停", "已归档"]
 const stats = [{"label": "看板面板总数", "value": 0}, {"label": "已启用面板", "value": 0}, {"label": "已暂停面板", "value": 0}]
+const summaryColumns = ['策略编号', '策略版本', '状态', '实际生效', '节点集合', '扩容阈值', '缩容阈值', '停用依据']
+const executionColumns = ['节点编号', '策略编号', '策略版本', '生效范围', '扩容阈值', '缩容阈值', '扩缩容建议', '数据来源']
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const balanceSummary = ref<Row[]>([])
+const balanceExecutions = ref<Row[]>([])
 
 function resetFilters() {
   filters.value = {}
@@ -99,14 +157,30 @@ async function runAction(action: string, row: Row) {
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
-    if (!response.ok) {
-      throw new Error('全局采集看板动作未生效，请稍后重试')
-    }
+    const payload = await response.json()
+    if (!response.ok || !payload.ok) throw new Error(payload.message || '全局采集看板动作未生效')
     await reload()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '全局采集看板操作失败'
+  }
+}
+
+async function loadBalanceData() {
+  errorMessage.value = ''
+  try {
+    const [summaryResp, executionResp] = await Promise.all([
+      request('/api/nodecheck/repair-balance-summary'),
+      request('/api/balance/executions'),
+    ])
+    if (!summaryResp.ok || !executionResp.ok) throw new Error('均衡同步数据读取失败')
+    const summaryPayload = await summaryResp.json()
+    const executionPayload = await executionResp.json()
+    balanceSummary.value = summaryPayload.items ?? []
+    balanceExecutions.value = executionPayload.items ?? []
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '均衡同步数据读取失败'
   }
 }
 
@@ -126,5 +200,18 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  void reload()
+  void loadBalanceData()
+})
 </script>
+
+<style scoped>
+.result-block { margin-top: 20px; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.block-head { display: flex; justify-content: space-between; align-items: center; }
+.block-head h3 { margin: 0; font-size: 15px; }
+.sub-title { font-size: 14px; margin: 14px 0 6px; }
+.status-tag { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+.tag-active { background: #dcfae6; color: #027a48; }
+.tag-draft { background: #eef2f6; color: #475467; }
+</style>
